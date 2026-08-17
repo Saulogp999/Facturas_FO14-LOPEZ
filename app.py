@@ -4,7 +4,6 @@ from pydantic import BaseModel, Field
 from typing import List
 from google import genai
 from google.genai import types
-from PIL import Image
 import io
 import os
 from datetime import datetime
@@ -43,7 +42,7 @@ if not API_KEY:
 
 client = genai.Client(api_key=API_KEY)
 
-# 3. Función de extracción con IA
+# 3. Función de extracción con IA usando los modelos vigentes
 def extraer_datos_comprobante(file_bytes: bytes, mime_type: str) -> FacturaData:
     prompt = """
     Analiza detalladamente este comprobante de pago de construcción o materiales (factura, boleta o nota).
@@ -55,11 +54,12 @@ def extraer_datos_comprobante(file_bytes: bytes, mime_type: str) -> FacturaData:
     """
     archivo_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
     
+    # Modelos activos en producción
     modelos_a_probar = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-2.5-pro"
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite"
     ]
     
     ultimo_error = None
@@ -81,7 +81,7 @@ def extraer_datos_comprobante(file_bytes: bytes, mime_type: str) -> FacturaData:
             
     raise RuntimeError(f"Error al procesar con IA: {str(ultimo_error)}")
 
-# 4. Gestión del Archivo Madre (Excel Local + Session State)
+# 4. Gestión del Archivo Madre (Excel Local + Descarga directa)
 EXCEL_PATH = "registro_madre_comprobantes.xlsx"
 
 def cargar_archivo_madre() -> pd.DataFrame:
@@ -127,9 +127,8 @@ def guardar_en_archivo_madre(datos: FacturaData, proyecto: str):
     df_final.to_excel(EXCEL_PATH, index=False)
     return df_final
 
-# 5. Barra Lateral con Parámetros y Descarga Directa
+# 5. Barra Lateral con Parámetros y Descarga
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/4341/4341139.png", width=70)
     st.header("⚙️ Control de Obra")
     proyecto_seleccionado = st.text_input("Proyecto Activo", value="Proyecto Residencial - Piura")
     st.divider()
@@ -140,7 +139,7 @@ with st.sidebar:
         total_acumulado = df_madre["Precio_Parcial"].sum()
         st.metric("Gasto Total Acumulado", f"S/ {total_acumulado:,.2f}")
         
-        # Botón de descarga en vivo de Excel
+        # Botón de descarga del Excel madre
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df_madre.to_excel(writer, index=False, sheet_name="Archivo_Madre")
@@ -152,7 +151,7 @@ with st.sidebar:
             use_container_width=True
         )
 
-# 6. Estructura de Pestañas Principales
+# 6. Estructura de Pestañas (Registro y Dashboard)
 tab_registro, tab_dashboard = st.tabs(["📥 Registro & Escaneo", "📊 Dashboard de Compras"])
 
 # ==========================================
@@ -228,7 +227,6 @@ with tab_registro:
             }
         )
         
-        # Recálculo de totales
         df_editado["precio_parcial"] = df_editado["cantidad"] * df_editado["precio_unitario"]
         total_calc = df_editado["precio_parcial"].sum()
         
@@ -258,7 +256,7 @@ with tab_dashboard:
     if df_madre.empty:
         st.info("ℹ️ Aún no hay compras registradas. Registra tus primeras facturas en la pestaña 'Registro & Escaneo'.")
     else:
-        # Métricas Principales (KPIs)
+        # Tarjetas de resumen (KPIs)
         kpi1, kpi2, kpi3, kpi4 = st.columns(4)
         total_gastado = df_madre["Precio_Parcial"].sum()
         total_facturas = df_madre["Nro_Comprobante"].nunique()
@@ -272,9 +270,8 @@ with tab_dashboard:
         
         st.divider()
         
-        # Gráficos Resumen
+        # Gráficos
         g_col1, g_col2 = st.columns(2)
-        
         with g_col1:
             st.markdown("##### 🏢 Gasto por Proveedor (Top 10)")
             gasto_prov = df_madre.groupby("Empresa_Proveedor")["Precio_Parcial"].sum().sort_values(ascending=False).head(10)
@@ -287,7 +284,7 @@ with tab_dashboard:
         
         st.divider()
         
-        # Tabla Detallada Filtrable
+        # Tabla detallada con filtro interactivo
         st.markdown("##### 🗃️ Registro Completo del Archivo Madre")
         
         filtro_prov = st.multiselect(
