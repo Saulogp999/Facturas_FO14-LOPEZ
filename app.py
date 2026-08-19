@@ -10,7 +10,7 @@ from datetime import datetime
 
 # Configuración de página
 st.set_page_config(
-    page_title="Gestión de Compras y Facturas - Obra",
+    page_title="Gestión de Compras - Obra  FO14",
     layout="wide",
     page_icon="🏗️"
 )
