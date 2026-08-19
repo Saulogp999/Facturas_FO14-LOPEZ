@@ -15,6 +15,10 @@ st.set_page_config(
     page_icon="🏗️"
 )
 
+# Carpeta para almacenamiento físico de sustentación
+FOLDER_SUSTENTOS = "sustentos"
+os.makedirs(FOLDER_SUSTENTOS, exist_ok=True)
+
 # 1. Esquema estructurado de salida (Pydantic)
 class ItemComprobante(BaseModel):
     descripcion_material: str = Field(description="Nombre o descripcion detallada del material o insumo")
@@ -54,7 +58,6 @@ def extraer_datos_comprobante(file_bytes: bytes, mime_type: str) -> FacturaData:
     """
     archivo_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
     
-    # Modelos activos en producción
     modelos_a_probar = [
         "gemini-3.7-flash",
         "gemini-3.6-flash",
@@ -81,7 +84,7 @@ def extraer_datos_comprobante(file_bytes: bytes, mime_type: str) -> FacturaData:
             
     raise RuntimeError(f"Error al procesar con IA: {str(ultimo_error)}")
 
-# 4. Gestión del Archivo Madre (Excel Local + Descarga directa)
+# 4. Gestión del Archivo Madre (Excel Local)
 EXCEL_PATH = "registro_madre_comprobantes.xlsx"
 
 def cargar_archivo_madre() -> pd.DataFrame:
@@ -94,10 +97,10 @@ def cargar_archivo_madre() -> pd.DataFrame:
         "ID_Registro", "Fecha_Hora_Registro", "Proyecto", "Tipo_Comprobante",
         "Nro_Comprobante", "Empresa_Proveedor", "RUC_Proveedor",
         "Fecha_Emision", "Moneda", "Descripcion_Material", "Cantidad",
-        "Unidad", "Precio_Unitario", "Precio_Parcial", "Total_Comprobante"
+        "Unidad", "Precio_Unitario", "Precio_Parcial", "Total_Comprobante", "Ruta_Sustento"
     ])
 
-def guardar_en_archivo_madre(datos: FacturaData, proyecto: str):
+def guardar_en_archivo_madre(datos: FacturaData, proyecto: str, ruta_sustento: str):
     df_actual = cargar_archivo_madre()
     fecha_reg = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     filas = []
@@ -119,7 +122,8 @@ def guardar_en_archivo_madre(datos: FacturaData, proyecto: str):
             "Unidad": item.unidad_medida,
             "Precio_Unitario": item.precio_unitario,
             "Precio_Parcial": item.precio_parcial,
-            "Total_Comprobante": datos.monto_total
+            "Total_Comprobante": datos.monto_total,
+            "Ruta_Sustento": ruta_sustento
         })
     
     df_nuevo = pd.DataFrame(filas)
@@ -127,10 +131,10 @@ def guardar_en_archivo_madre(datos: FacturaData, proyecto: str):
     df_final.to_excel(EXCEL_PATH, index=False)
     return df_final
 
-# 5. Barra Lateral con Parámetros y Descarga
+# 5. Barra Lateral
 with st.sidebar:
     st.header("⚙️ Control de Obra")
-    proyecto_seleccionado = st.text_input("Proyecto Activo", value="Proyecto Residencial - Piura")
+    proyecto_seleccionado = st.text_input("Proyecto Activo", value="Proyecto Residencial")
     st.divider()
     
     df_madre = cargar_archivo_madre()
@@ -139,7 +143,6 @@ with st.sidebar:
         total_acumulado = df_madre["Precio_Parcial"].sum()
         st.metric("Gasto Total Acumulado", f"S/ {total_acumulado:,.2f}")
         
-        # Botón de descarga del Excel madre
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df_madre.to_excel(writer, index=False, sheet_name="Archivo_Madre")
@@ -151,30 +154,24 @@ with st.sidebar:
             use_container_width=True
         )
 
-# 6. Estructura de Pestañas (Registro y Dashboard)
+# 6. Estructura de Pestañas
 tab_registro, tab_dashboard = st.tabs(["📥 Registro & Escaneo", "📊 Dashboard de Compras"])
 
 # ==========================================
 # PESTAÑA 1: REGISTRO Y ESCANEO
 # ==========================================
 with tab_registro:
-    st.subheader("Captura de Facturas y Boletas")
-    st.caption("Sube una foto o PDF de tu comprobante para procesarlo con IA y agregarlo al registro central.")
+    st.subheader("Captura y Almacenamiento de Comprobantes")
+    st.caption("Carga tus documentos (PDF, JPG, PNG). Se almacenará el sustento físico y se verificarán duplicados.")
     
-    col_in1, col_in2 = st.columns(2)
-    with col_in1:
-        archivo_subido = st.file_uploader("📂 Cargar archivo (PDF, JPG, PNG)", type=["pdf", "png", "jpg", "jpeg", "webp"])
-    with col_in2:
-        foto_camara = st.camera_input("📷 Tomar foto directa con la cámara")
+    archivo_subido = st.file_uploader("📂 Seleccionar comprobante (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg", "webp"])
 
-    archivo_activo = archivo_subido if archivo_subido is not None else foto_camara
-
-    if archivo_activo:
-        mime_type = archivo_activo.type
+    if archivo_subido is not None:
+        mime_type = archivo_subido.type
         if not mime_type:
-            if archivo_activo.name.lower().endswith(".pdf"):
+            if archivo_subido.name.lower().endswith(".pdf"):
                 mime_type = "application/pdf"
-            elif archivo_activo.name.lower().endswith(".png"):
+            elif archivo_subido.name.lower().endswith(".png"):
                 mime_type = "image/png"
             else:
                 mime_type = "image/jpeg"
@@ -182,38 +179,59 @@ with tab_registro:
         col_prev, col_act = st.columns([1, 2])
         with col_prev:
             if "pdf" in mime_type:
-                st.info(f"📄 **Documento PDF:** {archivo_activo.name}")
+                st.info(f"📄 **Documento PDF:** {archivo_subido.name}")
             else:
-                st.image(archivo_activo, caption="Comprobante cargado", use_container_width=True)
+                st.image(archivo_subido, caption="Comprobante cargado", use_container_width=True)
             
             btn_extraer = st.button("🔍 Extraer Datos con IA", type="primary", use_container_width=True)
 
         if btn_extraer:
-            with st.spinner("Leyendo comprobante y desglosando partidas..."):
+            with st.spinner("Analizando documento y extrayendo datos..."):
                 try:
-                    bytes_data = archivo_activo.getvalue()
+                    bytes_data = archivo_subido.getvalue()
                     datos_extraidos = extraer_datos_comprobante(bytes_data, mime_type)
+                    
+                    # Guardar archivo físicamente en carpeta sustentos
+                    nombre_archivo_sustento = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{archivo_subido.name}"
+                    ruta_guardada = os.path.join(FOLDER_SUSTENTOS, nombre_archivo_sustento)
+                    with open(ruta_guardada, "wb") as f:
+                        f.write(bytes_data)
+                    
                     st.session_state["datos_temp"] = datos_extraidos
-                    st.success("¡Datos extraídos correctamente!")
+                    st.session_state["ruta_sustento_temp"] = ruta_guardada
+                    st.success("¡Extracción completada!")
                 except Exception as e:
                     st.error(f"Error en la extracción: {str(e)}")
 
-    # Sección de Validación y Guardado
+    # Sección de Validación y Detección de Duplicados
     if "datos_temp" in st.session_state:
         datos: FacturaData = st.session_state["datos_temp"]
         st.divider()
-        st.subheader("📋 Validación de Encabezado y Materiales")
+        st.subheader("📋 Validación de Encabezado y Verificación de Serie")
+        
+        # VERIFICACIÓN DE DUPLICADOS EN BASE DE DATOS
+        df_existente = cargar_archivo_madre()
+        num_doc = datos.numero_comprobante.strip()
+        
+        if not df_existente.empty and "Nro_Comprobante" in df_existente.columns:
+            coincidencias = df_existente[df_existente["Nro_Comprobante"].astype(str).str.strip().str.upper() == num_doc.upper()]
+            if not coincidencias.empty:
+                fecha_prev = coincidencias.iloc[0]["Fecha_Hora_Registro"]
+                proveedor_prev = coincidencias.iloc[0]["Empresa_Proveedor"]
+                st.error(f"⚠️ **¡ALERTA DE DUPLICADO!** La factura/boleta con Serie/N° **{num_doc}** ya fue registrada anteriormente en el sistema el {fecha_prev} para el proveedor **{proveedor_prev}**.")
+            else:
+                st.success(f"✅ N° Comprobante **{num_doc}** verificado. Es un documento nuevo.")
         
         c1, c2, c3, c4 = st.columns(4)
         v_tipo = c1.text_input("Tipo de Comprobante", value=datos.tipo_comprobante)
-        v_nro = c2.text_input("N° Comprobante", value=datos.numero_comprobante)
+        v_nro = c2.text_input("N° Comprobante (Serie)", value=datos.numero_comprobante)
         v_empresa = c3.text_input("Proveedor / Empresa", value=datos.nombre_empresa)
         v_ruc = c4.text_input("RUC / ID", value=datos.ruc_empresa)
         
         items_dict = [it.model_dump() for it in datos.items]
         df_items = pd.DataFrame(items_dict)
         
-        st.markdown("**Lista de Materiales Extraídos (Puedes editar directamente en la tabla):**")
+        st.markdown("**Desglose de Partidas y Materiales:**")
         df_editado = st.data_editor(
             df_items,
             num_rows="dynamic",
@@ -232,7 +250,7 @@ with tab_registro:
         
         st.markdown(f"**Total Ítems:** `S/ {total_calc:,.2f}` | **Total Comprobante:** `S/ {datos.monto_total:,.2f}`")
         
-        if st.button("💾 Confirmar y Guardar en Archivo Madre", type="primary", use_container_width=True):
+        if st.button("💾 Confirmar y Registrar en Archivo Madre", type="primary", use_container_width=True):
             datos.items = [ItemComprobante(**row) for row in df_editado.to_dict(orient="records")]
             datos.monto_total = total_calc
             datos.tipo_comprobante = v_tipo
@@ -240,23 +258,27 @@ with tab_registro:
             datos.nombre_empresa = v_empresa
             datos.ruc_empresa = v_ruc
             
-            guardar_en_archivo_madre(datos, proyecto_seleccionado)
-            st.success("✅ ¡Factura guardada con éxito en el Archivo Madre!")
+            ruta_sustento = st.session_state.get("ruta_sustento_temp", "")
+            guardar_en_archivo_madre(datos, proyecto_seleccionado, ruta_sustento)
+            
+            st.success("✅ Documento y partidas guardados en el Archivo Madre con éxito.")
             del st.session_state["datos_temp"]
+            if "ruta_sustento_temp" in st.session_state:
+                del st.session_state["ruta_sustento_temp"]
             st.rerun()
 
 # ==========================================
 # PESTAÑA 2: DASHBOARD DE COMPRAS
 # ==========================================
 with tab_dashboard:
-    st.subheader("📊 Resumen Ejecutivo de Compras y Materiales")
+    st.subheader("📊 Resumen Ejecutivo y Control Semanal de Gastos")
     
     df_madre = cargar_archivo_madre()
     
     if df_madre.empty:
-        st.info("ℹ️ Aún no hay compras registradas. Registra tus primeras facturas en la pestaña 'Registro & Escaneo'.")
+        st.info("ℹ️ Aún no hay compras registradas. Registra tus primeros comprobantes en la pestaña 'Registro & Escaneo'.")
     else:
-        # Tarjetas de resumen (KPIs)
+        # KPIs
         kpi1, kpi2, kpi3, kpi4 = st.columns(4)
         total_gastado = df_madre["Precio_Parcial"].sum()
         total_facturas = df_madre["Nro_Comprobante"].nunique()
@@ -270,35 +292,31 @@ with tab_dashboard:
         
         st.divider()
         
-        # Gráficos
+        # Histograma de Gastos Semanales + Top Proveedores
         g_col1, g_col2 = st.columns(2)
+        
         with g_col1:
+            st.markdown("##### 📅 Histograma de Gastos Semanales del Proyecto")
+            df_madre["Fecha_DT"] = pd.to_datetime(df_madre["Fecha_Emision"], errors="coerce")
+            df_madre["Año_Semana"] = df_madre["Fecha_DT"].dt.strftime('%Y-W%U')
+            
+            gastos_semanales = df_madre.groupby("Año_Semana")["Precio_Parcial"].sum()
+            st.bar_chart(gastos_semanales, color="#27AE60")
+            
+        with g_col2:
             st.markdown("##### 🏢 Gasto por Proveedor (Top 10)")
             gasto_prov = df_madre.groupby("Empresa_Proveedor")["Precio_Parcial"].sum().sort_values(ascending=False).head(10)
             st.bar_chart(gasto_prov, color="#2E86C1")
-            
-        with g_col2:
-            st.markdown("##### 📑 Distribución por Tipo de Comprobante")
-            gasto_tipo = df_madre.groupby("Tipo_Comprobante")["Precio_Parcial"].sum()
-            st.bar_chart(gasto_tipo, color="#27AE60")
         
         st.divider()
         
-        # Tabla detallada con filtro interactivo
-        st.markdown("##### 🗃️ Registro Completo del Archivo Madre")
-        
-        filtro_prov = st.multiselect(
-            "Filtrar por Proveedor:",
-            options=df_madre["Empresa_Proveedor"].unique().tolist(),
-            default=df_madre["Empresa_Proveedor"].unique().tolist()
-        )
-        
-        df_filtrado = df_madre[df_madre["Empresa_Proveedor"].isin(filtro_prov)]
+        # Tabla del Archivo Madre
+        st.markdown("##### 🗃️ Archivo Madre Consolidado")
         
         st.dataframe(
-            df_filtrado[[
+            df_madre[[
                 "ID_Registro", "Fecha_Emision", "Empresa_Proveedor", "Nro_Comprobante",
-                "Descripcion_Material", "Cantidad", "Unidad", "Precio_Unitario", "Precio_Parcial"
+                "Descripcion_Material", "Cantidad", "Unidad", "Precio_Unitario", "Precio_Parcial", "Ruta_Sustento"
             ]],
             use_container_width=True,
             hide_index=True
