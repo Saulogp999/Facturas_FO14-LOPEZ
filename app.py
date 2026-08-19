@@ -84,21 +84,27 @@ def extraer_datos_comprobante(file_bytes: bytes, mime_type: str) -> FacturaData:
             
     raise RuntimeError(f"Error al procesar con IA: {str(ultimo_error)}")
 
-# 4. Gestión del Archivo Madre (Excel Local)
+# 4. Gestión del Archivo Madre (Con migración automática de columnas)
 EXCEL_PATH = "registro_madre_comprobantes.xlsx"
+COLUMNAS_MADRE = [
+    "ID_Registro", "Fecha_Hora_Registro", "Proyecto", "Tipo_Comprobante",
+    "Nro_Comprobante", "Empresa_Proveedor", "RUC_Proveedor",
+    "Fecha_Emision", "Moneda", "Descripcion_Material", "Cantidad",
+    "Unidad", "Precio_Unitario", "Precio_Parcial", "Total_Comprobante", "Ruta_Sustento"
+]
 
 def cargar_archivo_madre() -> pd.DataFrame:
     if os.path.exists(EXCEL_PATH):
         try:
-            return pd.read_excel(EXCEL_PATH)
+            df = pd.read_excel(EXCEL_PATH)
+            # Asegurar que todas las columnas requeridas existan
+            for col in COLUMNAS_MADRE:
+                if col not in df.columns:
+                    df[col] = ""
+            return df[COLUMNAS_MADRE]
         except Exception:
             pass
-    return pd.DataFrame(columns=[
-        "ID_Registro", "Fecha_Hora_Registro", "Proyecto", "Tipo_Comprobante",
-        "Nro_Comprobante", "Empresa_Proveedor", "RUC_Proveedor",
-        "Fecha_Emision", "Moneda", "Descripcion_Material", "Cantidad",
-        "Unidad", "Precio_Unitario", "Precio_Parcial", "Total_Comprobante", "Ruta_Sustento"
-    ])
+    return pd.DataFrame(columns=COLUMNAS_MADRE)
 
 def guardar_en_archivo_madre(datos: FacturaData, proyecto: str, ruta_sustento: str):
     df_actual = cargar_archivo_madre()
@@ -140,7 +146,7 @@ with st.sidebar:
     df_madre = cargar_archivo_madre()
     st.metric("Total Líneas Registradas", len(df_madre))
     if not df_madre.empty:
-        total_acumulado = df_madre["Precio_Parcial"].sum()
+        total_acumulado = pd.to_numeric(df_madre["Precio_Parcial"], errors="coerce").fillna(0).sum()
         st.metric("Gasto Total Acumulado", f"S/ {total_acumulado:,.2f}")
         
         buffer = io.BytesIO()
@@ -275,7 +281,10 @@ with tab_dashboard:
     
     df_madre = cargar_archivo_madre()
     
-    if df_madre.empty:
+    # Asegurar conversión numérica para métricas
+    df_madre["Precio_Parcial"] = pd.to_numeric(df_madre["Precio_Parcial"], errors="coerce").fillna(0)
+    
+    if df_madre.empty or df_madre["ID_Registro"].isnull().all() or len(df_madre) == 0:
         st.info("ℹ️ Aún no hay compras registradas. Registra tus primeros comprobantes en la pestaña 'Registro & Escaneo'.")
     else:
         # KPIs
@@ -298,7 +307,7 @@ with tab_dashboard:
         with g_col1:
             st.markdown("##### 📅 Histograma de Gastos Semanales del Proyecto")
             df_madre["Fecha_DT"] = pd.to_datetime(df_madre["Fecha_Emision"], errors="coerce")
-            df_madre["Año_Semana"] = df_madre["Fecha_DT"].dt.strftime('%Y-W%U')
+            df_madre["Año_Semana"] = df_madre["Fecha_DT"].dt.strftime('%Y-W%U').fillna("Sin Fecha")
             
             gastos_semanales = df_madre.groupby("Año_Semana")["Precio_Parcial"].sum()
             st.bar_chart(gastos_semanales, color="#27AE60")
@@ -314,10 +323,7 @@ with tab_dashboard:
         st.markdown("##### 🗃️ Archivo Madre Consolidado")
         
         st.dataframe(
-            df_madre[[
-                "ID_Registro", "Fecha_Emision", "Empresa_Proveedor", "Nro_Comprobante",
-                "Descripcion_Material", "Cantidad", "Unidad", "Precio_Unitario", "Precio_Parcial", "Ruta_Sustento"
-            ]],
+            df_madre[COLUMNAS_MADRE],
             use_container_width=True,
             hide_index=True
         )
